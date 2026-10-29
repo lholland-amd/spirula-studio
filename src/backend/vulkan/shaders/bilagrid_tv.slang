@@ -54,13 +54,10 @@ struct TvParams {
 void bilagrid_tv_loss_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
                           uniform TvParams p) {
     uint3 t = uint3(ftid % 4u, (ftid / 4u) % 4u, ftid / 16u);
+    // One grid row: nl_per_row is the stride of the (ni, li) loop below.
     BgTvBlocks b = bg_tv_blocks(bid, p.nl_per_row, p.W);
-    int idx = b.nl * 4 + int(t.x);
     int wi = b.w * 4 + int(t.y);
     int hi = b.h * 4 + int(t.z);
-    bool inside = (wi < p.W && hi < p.H && idx < p.L * p.N);
-    int li = idx % p.L; idx /= p.L;
-    int ni = idx;
     BgReader r = {p.fp32, p.q16, p.vbounds};
 
     int C = p.C;
@@ -69,33 +66,43 @@ void bilagrid_tv_loss_fwd(uint3 bid: SV_GroupID, uint ftid: SV_GroupThreadID,
     int sl = p.H * p.W * C;
     int sn = p.L * p.H * p.W * C;
 
-    float tv_sum = 0.0f;
-    if (inside) {
-        int cell_base = ni * sn + li * sl + hi * sh + wi * sw;
-        for (int ci = 0; ci < C; ci++) {
-            int cell_idx = cell_base + ci;
-            float val = bg_read(kValueQuant != 0, r, cell_idx);
-            if (wi > 0) {
-                float val0 = bg_read(kValueQuant != 0, r, cell_idx - sw);
-                tv_sum += (val - val0) * (val - val0) /
-                          float(p.L * p.H * (p.W - 1));
+    int nl_blocks = (p.N * p.L + 3) / 4;
+    float tv_acc = 0.0f;
+    for (int nlb = b.nl; nlb < nl_blocks; nlb += p.nl_per_row) {
+        int idx = nlb * 4 + int(t.x);
+        bool inside = (wi < p.W && hi < p.H && idx < p.L * p.N);
+        int li = idx % p.L; idx /= p.L;
+        int ni = idx;
+
+        float tv_sum = 0.0f;
+        if (inside) {
+            int cell_base = ni * sn + li * sl + hi * sh + wi * sw;
+            for (int ci = 0; ci < C; ci++) {
+                int cell_idx = cell_base + ci;
+                float val = bg_read(kValueQuant != 0, r, cell_idx);
+                if (wi > 0) {
+                    float val0 = bg_read(kValueQuant != 0, r, cell_idx - sw);
+                    tv_sum += (val - val0) * (val - val0) /
+                              float(p.L * p.H * (p.W - 1));
+                }
+                if (hi > 0) {
+                    float val0 = bg_read(kValueQuant != 0, r, cell_idx - sh);
+                    tv_sum += (val - val0) * (val - val0) /
+                              float(p.L * (p.H - 1) * p.W);
+                }
+                if (li > 0) {
+                    float val0 = bg_read(kValueQuant != 0, r, cell_idx - sl);
+                    tv_sum += (val - val0) * (val - val0) /
+                              float((p.L - 1) * p.H * p.W);
+                }
             }
-            if (hi > 0) {
-                float val0 = bg_read(kValueQuant != 0, r, cell_idx - sh);
-                tv_sum += (val - val0) * (val - val0) /
-                          float(p.L * (p.H - 1) * p.W);
-            }
-            if (li > 0) {
-                float val0 = bg_read(kValueQuant != 0, r, cell_idx - sl);
-                tv_sum += (val - val0) * (val - val0) /
-                          float((p.L - 1) * p.H * p.W);
-            }
+            tv_sum /= float(C * p.N);
         }
-        tv_sum /= float(C * p.N);
+        tv_acc += tv_sum;
     }
 
     uint tid = (t.z * 4 + t.y) * 4 + t.x;
-    _bt_red64[tid] = tv_sum;
+    _bt_red64[tid] = tv_acc;
     GroupMemoryBarrierWithGroupSync();
     [ForceUnroll]
     for (uint s = 32; s > 0; s >>= 1) {

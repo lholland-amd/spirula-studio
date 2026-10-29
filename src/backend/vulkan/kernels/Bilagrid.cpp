@@ -18,6 +18,8 @@
 #include <engine/EngineInternal.h>
 #include <core/Tensor.h>
 
+#include <algorithm>
+
 #include "backend/vulkan/kernels/KernelCommon.h"
 
 namespace {
@@ -1156,6 +1158,23 @@ void tv_grid(int N, int L, int H, int W, uint32_t& gx, uint32_t& gy,
     check_grid_dims(gx, gy, gz, "tv/channel_mean");
 }
 
+// The forward loss sums into one float: a workgroup per (ni, li) block puts
+// thousands of same-address atomics on RDNA 4, which serializes them (~60 ns
+// each). Fewer workgroups loop over the (ni, li) axis instead.
+constexpr int64_t kTvFwdTargetGroups = 256;
+
+void tv_fwd_grid(int N, int L, int H, int W, uint32_t& gx, uint32_t& gz,
+                 int& nl_stride) {
+    const int64_t nl_blocks = ((int64_t)N * L + 3) / 4;
+    const int64_t spatial = (int64_t)((W + 3) / 4) * ((H + 3) / 4);
+    int64_t per_slot = kTvFwdTargetGroups / spatial;
+    per_slot = std::max<int64_t>(1, std::min(per_slot, nl_blocks));
+    gx = (uint32_t)per_slot;
+    gz = (uint32_t)spatial;
+    nl_stride = (int)per_slot;
+    check_grid_dims(gx, 1, gz, "tv/fwd");
+}
+
 }  // namespace
 
 void tv_loss_forward(
@@ -1169,10 +1188,10 @@ void tv_loss_forward(
     p.fp32 = r.fp32; p.q16 = r.q16; p.vbounds = r.vbounds;
     p.out_buf = (uint64_t)tv_loss;
     p.N = N; p.C = C; p.L = L; p.H = H; p.W = W;
-    uint32_t gx, gy, gz;
-    tv_grid(N, L, H, W, gx, gy, gz, p.nl_per_row);
+    uint32_t gx, gz;
+    tv_fwd_grid(N, L, H, W, gx, gz, p.nl_per_row);
     vkk::dispatch("bilagrid_tv.bilagrid_tv_loss_fwd",
-                  backend::vk::SpecList{r.vq}, gx, gy, gz, &p, sizeof(p));
+                  backend::vk::SpecList{r.vq}, gx, 1, gz, &p, sizeof(p));
 }
 
 void tv_loss_backward(

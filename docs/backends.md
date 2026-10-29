@@ -104,6 +104,11 @@ change design decisions:
 - Write-coalescing, not atomic throughput, has repeatedly been the dominant
   cost in the fused projection-backward/optimizer path on Vulkan. Staged
   coalesced writeback plus a tree reduction fixed it.
+- Same-address float atomics serialize on RDNA 4 (RADV), ~60 ns each.
+  `appearance_bwd` had one workgroup per 256 pixels adding to the same PPISP
+  parameters: 2.15 ms a call at 4,300 workgroups, 0.16 ms after capping the
+  workgroups at 256 and striding them over the image. RADV already merges the
+  lanes of a uniform-address atomic; it cannot merge across workgroups.
 - Vulkan driver choice matters (`amdvlk` vs RADV differ by an order of
   magnitude on some kernels). When comparing, state the driver.
 
