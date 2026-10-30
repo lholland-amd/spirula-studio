@@ -76,8 +76,8 @@ AppParams make_params(const AppearanceChainParams& c, const TorchTensorView& rgb
 }
 
 // The backward's workgroups stride over the image: with one per 256 pixels,
-// thousands of them add to the same few ppisp parameters, and RDNA 4 executes
-// same-address float atomics one at a time (~60 ns each).
+// thousands of them add to the same few ppisp parameters, and RDNA 4
+// serializes float atomics to a shared address (docs/backends.md).
 constexpr int64_t kBwdGroupsPerImage = 256;
 
 void dispatch_image(const char* entry, const AppearanceChainParams& c,

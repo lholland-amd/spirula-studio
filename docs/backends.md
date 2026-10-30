@@ -65,9 +65,10 @@ pins Intel's variable width, and on RDNA picks wave32 or wave64 per kernel
 (`kWave64Entries`, src/backend/vulkan/VulkanPipelines.cpp);
 `SS_VK_SUBGROUP=N` forces one width everywhere. `SS_VK_NATIVE_ATOMICS=0`,
 `SS_VK_NATIVE_INT64=0`, `SS_VK_NATIVE_INT8=0` force the fallback blobs
-for A/B testing, and `SS_VK_XCHG_FLOAT_ADD=0/1` (Windows builds) the
-exchange-based float add that AMD's Windows driver gets by default
-(src/backend/vulkan/README.md).
+for A/B testing (on Navi 48, `kCasFloatAddEntries` take the CAS blob by
+default; `SS_VK_NATIVE_ATOMICS=1` forces native there too), and
+`SS_VK_XCHG_FLOAT_ADD=0/1` (Windows builds) the exchange-based float add that
+AMD's Windows driver gets by default (src/backend/vulkan/README.md).
 
 The Vulkan README documents hard-won specifics that are easy to regress —
 e.g. the emulated i64 scan accumulator must stay a `uint2` rather than a
@@ -104,11 +105,13 @@ change design decisions:
 - Write-coalescing, not atomic throughput, has repeatedly been the dominant
   cost in the fused projection-backward/optimizer path on Vulkan. Staged
   coalesced writeback plus a tree reduction fixed it.
-- Same-address float atomics serialize on RDNA 4 (RADV), ~60 ns each.
-  `appearance_bwd` had one workgroup per 256 pixels adding to the same PPISP
-  parameters: 2.15 ms a call at 4,300 workgroups, 0.16 ms after capping the
-  workgroups at 256 and striding them over the image. RADV already merges the
-  lanes of a uniform-address atomic; it cannot merge across workgroups.
+- Float atomic add is slow on RDNA 4 (RADV, AMD's Windows driver) when lanes
+  or workgroups share an address. Two mitigations: fewer workgroups adding to
+  one address (`appearance_bwd` went from 2.15 to 0.16 ms a call by capping
+  them at 256 and striding over the image), and a CAS-loop blob on Navi 48
+  for the entries in `kCasFloatAddEntries`
+  (src/backend/vulkan/VulkanPipelines.cpp). CAS is not a win everywhere, so
+  the list is per entry. `SS_VK_NATIVE_ATOMICS=1` turns it off.
 - Vulkan driver choice matters (`amdvlk` vs RADV differ by an order of
   magnitude on some kernels). When comparing, state the driver.
 

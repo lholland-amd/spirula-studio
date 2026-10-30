@@ -1159,8 +1159,8 @@ void tv_grid(int N, int L, int H, int W, uint32_t& gx, uint32_t& gy,
 }
 
 // The forward loss sums into one float: a workgroup per (ni, li) block puts
-// thousands of same-address atomics on RDNA 4, which serializes them (~60 ns
-// each). Fewer workgroups loop over the (ni, li) axis instead.
+// thousands of same-address float atomics on RDNA 4, which serializes them
+// (docs/backends.md). Fewer workgroups loop over the (ni, li) axis instead.
 constexpr int64_t kTvFwdTargetGroups = 256;
 
 void tv_fwd_grid(int N, int L, int H, int W, uint32_t& gx, uint32_t& gz,
